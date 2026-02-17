@@ -18,18 +18,26 @@
 
 ## Phase 0 — Setup environnement (Jours 1-2)
 
+> **Status : DONE** (commit d5512bf)
+> Python 3.11 + venv + pip. Package `prism/` (pas `src/`). `pip install -e .` via pyproject.toml.
+> stable-baselines3 différé à Phase 3. numpy pinné `<2.0`.
+
 ### 0.1 Structure du projet
 
 ```bash
+# Plan initial (src/ n'a pas été utilisé) :
 mkdir -p prism/{src/{env,agent,baselines,analysis},experiments,notebooks,tests,results/{exp_a,exp_b,exp_c}}
 touch prism/src/__init__.py prism/src/env/__init__.py prism/src/agent/__init__.py
 touch prism/src/baselines/__init__.py prism/src/analysis/__init__.py
 ```
 
+> **Réalisation :** Le package est `prism/` directement (pas `prism/src/`). Plus simple pour un projet de recherche solo. Imports : `from prism.agent.sr_layer import SRLayer`.
+
 ### 0.2 Dépendances
 
 Créer `requirements.txt` :
 ```
+# Plan initial :
 Python 3.11+
 minigrid>=2.3
 gymnasium>=0.29
@@ -43,11 +51,18 @@ pytest
 stable-baselines3
 ```
 
+> **Réalisation :** `stable-baselines3` retiré (PyTorch ~2 Go inutile avant Phase 3).
+> `numpy>=1.24,<2.0` pinné pour éviter les breaking changes.
+> Versions installées : minigrid 2.5, gymnasium 0.29.1, numpy 1.26.4, scipy 1.17.0.
+
 **Action :**
 ```bash
+# Plan initial :
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+> **Réalisation :** Sous Windows : `py -3.11 -m venv .venv` puis `.venv\Scripts\activate`.
 
 ### 0.3 Vérification MiniGrid
 
@@ -67,13 +82,25 @@ print(f"Action space: {env.action_space}")
 - Utiliser `env.unwrapped.agent_pos` pour extraire la position
 - Ou wrapper avec `FullyObsWrapper` si besoin de la grille complète
 
+> **Résolu :** `env.unwrapped.agent_pos` utilisé. C'est un **tuple** dans MiniGrid 2.5 (pas un ndarray).
+> FourRooms 19×19 a **260 cellules accessibles** (pas 80-150 comme estimé initialement).
+> Pas de portes — les pièces sont connectées par des passages ouverts.
+> `max_steps=500` nécessaire (défaut 100 trop court pour convergence SR).
+
 **Critère de validation :** L'agent random se déplace dans les 4 pièces. On peut extraire `agent_pos` à chaque step.
 
 ---
 
 ## Phase 1 — Assemblage SR (Semaines 1-2)
 
+> **Status : DONE** — 97 tests passent (7 fichiers). Tous les composants implémentés dans `prism/` (pas `src/`).
+> → CP1 PASSED (vérifié via `notebooks/01_sr_validation.ipynb`)
+
 ### 1.1 `state_mapper.py` — Mapping position → index SR
+
+> **Status : DONE** — `prism/env/state_mapper.py` (97 lignes), tests : `tests/test_state_mapper.py`
+> Ajout de `to_grid(values)` pour la visualisation et `get_grid_shape()`.
+> n_states = 260 dans FourRooms (pas 80-150). Les `goal` sont aussi inclus comme cellules accessibles.
 
 **But :** Convertir les positions (x, y) de MiniGrid en indices entiers pour la matrice SR N×N.
 
@@ -119,11 +146,16 @@ class StateMapper:
 - `test_bijection()` — pos_to_idx et idx_to_pos sont inverses
 - `test_n_states_reasonable()` — entre 80 et 150 pour FourRooms standard
 
+> **Réalisation :** Borne ajustée à 80-300 (FourRooms a 260 cellules). Tous les tests `[x]`.
+
 **Estimation :** 2-3 heures
 
 ---
 
 ### 1.2 `sr_layer.py` — SR tabulaire
+
+> **Status : DONE** — `prism/agent/sr_layer.py` (81 lignes), tests : `tests/test_sr_layer.py` (147 lignes, 17 tests)
+> Fidèle au plan. `update()` retourne `delta_M` comme spécifié. Tous les tests `[x]`.
 
 **But :** Matrice M(s,s') apprise par TD(0), vecteur R(s), calcul V(s) = M·R.
 
@@ -178,6 +210,11 @@ class SRLayer:
 ---
 
 ### 1.3 `dynamics_wrapper.py` — Perturbations contrôlées
+
+> **Status : DONE** — `prism/env/dynamics_wrapper.py` (152 lignes), tests : `tests/test_dynamics_wrapper.py` (154 lignes, 12 tests)
+> `get_true_transition_matrix()` itère sur 4 directions × 3 actions de mouvement, poids 1/(4×3).
+> Piège "reset re-applique perturbations" géré comme prévu.
+> Note : `door_block` cible des passages ouverts (pas de portes dans FourRooms).
 
 **But :** Wrapper Gymnasium qui ajoute des perturbations dynamiques sur MiniGrid.
 
@@ -255,6 +292,9 @@ Cette méthode est nécessaire pour calculer M* (ground truth) et donc le Metaco
 
 ### 1.4 `perturbation_schedule.py`
 
+> **Status : STUB** — `PerturbationEvent` dataclass existe, `PerturbationSchedule` lève `NotImplementedError`.
+> Sera complété en Phase 3 quand les expériences seront exécutées.
+
 **But :** Configs réutilisables de schedules de perturbation pour chaque expérience.
 
 ```python
@@ -291,6 +331,10 @@ class PerturbationSchedule:
 
 ### 1.5 `spectral.py` — Décomposition spectrale de M
 
+> **Status : DONE** — `prism/analysis/spectral.py` (79 lignes)
+> Utilise `scipy.linalg.eigh` avec `subset_by_index`. Symétrise M avec (M+M.T)/2.
+> `plot_eigenvectors()` crée la grille 2×3 de heatmaps RdBu_r.
+
 **But :** Calculer et visualiser les eigenvectors de M (validation que les grid cells émergent).
 
 **Base :** Adapter depuis le repo de Chelu (temporal_abstraction).
@@ -323,6 +367,11 @@ def plot_eigenvectors_on_grid(eigenvectors, state_mapper, grid_shape, k=6):
 
 ### 1.6 Notebook `01_sr_validation.ipynb` — Sanity check
 
+> **Status : DONE** — 9 sections, inclut les checks CP1 (convergence, go/no-go automatique).
+> Couvre : entraînement 300 épisodes, courbes d'apprentissage, heatmaps SR, eigenvecteurs,
+> triptyque V/U/C, calibration (ECE, MI, reliability diagram), et diagnostic CP1.
+> → **CP1 PASSED**
+
 **Objectif :** Vérifier que tout fonctionne avant de passer à la contribution originale.
 
 **Contenu :**
@@ -335,19 +384,33 @@ def plot_eigenvectors_on_grid(eigenvectors, state_mapper, grid_shape, k=6):
 6. Comparer M appris vs. M* (ground truth) — erreur moyenne par état
 
 **Critères de validation Phase 1 (milestone) :**
-- [ ] M converge : ||M - M*||_F décroît monotoniquement
-- [ ] Les heatmaps de M montrent des patterns de diffusion depuis l'état source
-- [ ] Les eigenvectors ressemblent à ceux de Stachenfeld 2017
-- [ ] Le transfert de reward fonctionne : nouveau V correct sans réapprentissage de M
+- [x] M converge : ||M - M*||_F décroît monotoniquement
+- [x] Les heatmaps de M montrent des patterns de diffusion depuis l'état source
+- [x] Les eigenvectors ressemblent à ceux de Stachenfeld 2017
+- [x] Le transfert de reward fonctionne : nouveau V correct sans réapprentissage de M
+- [x] Tous les tests passent (141 tests, 9 fichiers — mis à jour Palier 1 Exp B)
 - [ ] Tous les tests unitaires passent
 
 ---
 
 ## Phase 2 — Méta-SR et calibration (Semaines 3-5) ⭐
 
+> **Status : PARTIELLEMENT DONE** — Composants core (meta_sr, controller, agent, calibration, visualization) implémentés et testés.
+> Baselines = **implémentés** (Palier 1 Exp B). `metrics.py` = **implémenté** (bootstrap_ci, mann_whitney, holm_bonferroni, compare_conditions).
+> Controller exploit branch = **corrigé** (greedy sur V_explore).
+> Sweep, Exp A, notebook 02 = reportés à Phase 3.
+> → CP2, CP3 PENDING (seront validés après exécution d'Exp A)
+
 C'est le cœur du projet — la contribution originale.
 
 ### 2.1 `meta_sr.py` — Carte d'incertitude U(s) et signal C(s)
+
+> **Status : DONE** — `prism/agent/meta_sr.py` (144 lignes), tests : `tests/test_meta_sr.py` (179 lignes, 18 tests)
+> Décisions d'implémentation vs. plan :
+> - Normalisation **p99 adaptative** (deque des 5000 derniers δ) au lieu de running min/max
+> - Régime cold-start simplifié : pur decay exponentiel (pas de blending data/prior)
+> - `_recent_visits` deque(maxlen=50) pour la détection de changement
+> - `all_uncertainties()` et `all_confidences()` vectorisés via numpy
 
 **C'est le fichier le plus important du projet.**
 
@@ -446,6 +509,11 @@ class MetaSR:
 
 ### 2.2 `controller.py` — Politique adaptative
 
+> **Status : DONE** — `prism/agent/controller.py` (101 lignes)
+> Simplification vs. plan : l'action exploit ne fait PAS d'évaluation V_explore des voisins
+> (nécessiterait un modèle de transition T[s][a] → s'). Utilise sélection aléatoire parmi
+> les actions disponibles. L'évaluation voisins est une amélioration Phase 3.
+
 **But :** Utiliser U(s) et C(s) pour adapter le comportement de l'agent.
 
 ```python
@@ -504,6 +572,13 @@ class PRISMController:
 ---
 
 ### 2.3 `prism_agent.py` — Agent complet
+
+> **Status : DONE** — `prism/agent/prism_agent.py` (195 lignes)
+> Ajouts vs. plan :
+> - Intégration `config.py` (PRISMConfig dataclass centralise tous les hyperparamètres)
+> - Méthodes helper : `get_uncertainty_map()`, `get_confidence_map()`, `get_value_map()`
+> - `_get_state()` gère `tuple(env.unwrapped.agent_pos)` pour MiniGrid 2.5
+> - `MOVEMENT_ACTIONS = [0, 1, 2]` constante (turn_left, turn_right, forward)
 
 **But :** Assembler SR + Méta-SR + Controller dans une boucle agent-environnement.
 
@@ -573,6 +648,11 @@ class PRISMAgent:
 
 ### 2.4 `calibration.py` — Métriques psychophysiques ⭐
 
+> **Status : DONE** — `prism/analysis/calibration.py` (207 lignes), tests : `tests/test_calibration.py` (149 lignes, 17 tests)
+> Implémente : `sr_errors()`, `sr_accuracies()`, `expected_calibration_error()`,
+> `reliability_diagram_data()`, `plot_reliability_diagram()`, `metacognitive_index()`.
+> **Phase 3 :** Ajouter `hosmer_lemeshow_test()` (référencé dans checkpoints.md CP3).
+
 **C'est la deuxième contribution clé — traiter l'agent comme un sujet de psychologie cognitive.**
 
 ```python
@@ -625,6 +705,10 @@ def accuracy_from_sr_error(M, M_star, tau_percentile=50):
 
 ### 2.5 `visualization.py` — Superposition U/M
 
+> **Status : DONE** — `prism/analysis/visualization.py` (98 lignes)
+> Implémente : `plot_sr_heatmap()`, `plot_value_map()`, `plot_uncertainty_map()`.
+> Animation `animate_U_after_perturbation` pas encore faite (Phase 3).
+
 ```python
 def plot_uncertainty_map(U, state_mapper, grid_shape, ax=None):
     """Heatmap de U(s) sur la grille."""
@@ -654,6 +738,10 @@ def animate_U_after_perturbation(U_snapshots, state_mapper, grid_shape, filename
 
 ### 2.6 Baselines pour Exp A
 
+> **Status : STUBS** — `sr_blind.py`, `sr_count.py` lèvent `NotImplementedError("Phase 2")`.
+> `sr_bayesian.py`, `sb3_baselines.py` lèvent `NotImplementedError("Phase 3")`.
+> Implémentation complète reportée à Phase 3.
+
 **`sr_blind.py`** — Agent SR sans méta-monitoring. Même SR, ε fixe, confiance = constante (ou random).
 
 **`sr_count.py`** — SR + confiance count-based : C(s) = f(1/√visits(s)). Teste si le simple comptage de visites suffit.
@@ -680,6 +768,9 @@ class SRBayesian:
 
 ### 2.7 Sweep hyperparamètres méta-SR
 
+> **Status : PAS COMMENCÉ** — Reporté à Phase 3.
+> → CP2 (voir checkpoints.md) validera les résultats du sweep.
+
 **Avant l'Exp A formelle**, sweep factoriel :
 
 | Paramètre | Valeurs testées |
@@ -700,6 +791,9 @@ Total : 3⁴ = 81 configs × 10 runs = 810 runs.
 ---
 
 ### 2.8 Exécuter Exp A — Calibration métacognitive
+
+> **Status : STUB** — `experiments/exp_a_calibration.py` lève `NotImplementedError("Phase 2")`.
+> → CP3 (voir checkpoints.md) validera les résultats d'Exp A.
 
 **`experiments/exp_a_calibration.py`**
 
@@ -758,24 +852,62 @@ def run_exp_a(condition: str, n_runs=100, seed_base=42):
 
 ### Milestone Phase 2
 
-- [ ] `meta_sr.py` passe tous les tests
-- [ ] `prism_agent.py` tourne dans FourRooms sans crash
-- [ ] Le reliability diagram de PRISM montre une tendance positive
-- [ ] ECE < 0.15 atteint de manière reproductible
-- [ ] MI > 0.5 atteint de manière reproductible
-- [ ] Notebook `02_meta_sr_demo.ipynb` avec visualisations interactives
+- [x] `meta_sr.py` passe tous les tests (18 tests)
+- [x] `prism_agent.py` tourne dans FourRooms sans crash (train_episode loop OK)
+- [ ] Le reliability diagram de PRISM montre une tendance positive → Phase 3 (Exp A)
+- [ ] ECE < 0.15 atteint de manière reproductible → Phase 3 (Exp A)
+- [ ] MI > 0.5 atteint de manière reproductible → Phase 3 (Exp A)
+- [ ] Notebook `02_meta_sr_demo.ipynb` avec visualisations interactives → Phase 3
+
+> **Note :** Les items non cochés dépendent du sweep (§2.7) et d'Exp A (§2.8) qui sont reportés en Phase 3.
+> Les composants logiciels de Phase 2 sont tous implémentés et testés.
 
 ---
 
 ## Phase 3 — Exploration et Adaptation (Semaines 6-8) ⭐
 
+> **Status : EN COURS** — Palier 1 d'Exp B complet (infrastructure, baselines, metrics, runner). Palier 1.6 pending (lancer les 800 runs).
+>
+> **Prérequis restants :**
+>
+> 1. **Stubs à compléter :**
+>    - ~~`prism/baselines/` — **DONE** (7 agents : RandomAgent, SREpsilonGreedy, SREpsilonDecay, SRCountBonus, SRNormBonus, SRPosterior, SROracle)~~
+>    - ~~`prism/analysis/metrics.py` — **DONE** (bootstrap_ci, mann_whitney_test, holm_bonferroni, compare_conditions, compare_all_pairs)~~
+>    - `prism/env/perturbation_schedule.py` — implémenter les méthodes `exp_a()`, `exp_c()`
+>    - `experiments/exp_a_calibration.py` — implémenter `run_exp_a()`
+>
+> 2. **Fonctions manquantes à créer :**
+>    - `hosmer_lemeshow_test()` dans `prism/analysis/calibration.py`
+>    - ~~`get_true_transition_matrix()` dans `DynamicsWrapper` — **DONE**~~
+>
+> 3. **Dépendance externe :**
+>    - Installer `stable-baselines3` pour Q-learning/DQN baseline (Exp C)
+>    - Fallback prévu : Q-learning tabulaire custom si incompatibilité SB3
+>
+> 4. **Leçons Phases 1-2 à appliquer :**
+>    - FourRooms = 19×19, **260 états** accessibles (pas ~100)
+>    - Pas de portes dans MiniGrid v2.5 (passages ouverts)
+>    - `max_steps=500` obligatoire dans `gym.make()`
+>    - Normalisation p99 dans MetaSR (pas min-max naïf)
+>    - `agent_pos` est un tuple `(x, y)`, pas un int
+>
+> **Checkpoints Phase 3 :**
+> - CP2 après sweep (§2.7) — valider hyperparamètres
+> - CP3 après Exp A (§2.8) — valider calibration
+> - CP4 après Exp B (§3.3) — valider exploration
+> - CP5 après Exp C (§3.4) — valider adaptation
+
 ### 3.1 Config monde Exp B
 
 **Grand monde 19×19 avec 4+ pièces et 4 goals cachés.**
 
+> **Note Phase 1-2 :** FourRooms est déjà 19×19 avec 260 cellules. Pour un monde "plus grand",
+> il faudra un env custom (héritant de `MiniGridEnv`). Le paramètre `size` n'existe pas
+> dans FourRooms standard.
+
 Options :
-- Utiliser `MiniGrid-FourRooms-v0` en augmentant la taille (paramètre `size`)
-- Ou créer un env custom avec `MiniGridEnv` comme base
+- ~~Utiliser `MiniGrid-FourRooms-v0` en augmentant la taille (paramètre `size`)~~ → pas supporté
+- Créer un env custom avec `MiniGridEnv` comme base (seule option viable)
 
 ```python
 # Vérifier si FourRooms supporte un paramètre de taille
@@ -818,6 +950,8 @@ En plus de PRISM, 7 baselines à implémenter :
 
 ### 3.3 Exécuter Exp B — Exploration dirigée
 
+> → CP4 (voir checkpoints.md) validera les résultats d'Exp B.
+
 **`experiments/exp_b_exploration.py`**
 
 100 runs par condition, 8 conditions = 800 runs total.
@@ -839,6 +973,8 @@ En plus de PRISM, 7 baselines à implémenter :
 ---
 
 ### 3.4 Exécuter Exp C — Adaptation au changement
+
+> → CP5 (voir checkpoints.md) validera les résultats d'Exp C.
 
 **`experiments/exp_c_adaptation.py`**
 
@@ -901,67 +1037,103 @@ En plus de PRISM, 7 baselines à implémenter :
 ## Récapitulatif temporel
 
 ```
-Semaine 1 ─────────────────────────────────────────
+Semaine 1 ──────────────────────────────── ✅ DONE
   Jour 1-2  : Phase 0 (setup) + StateMapper + SR Layer
-  Jour 3-4  : DynamicsWrapper + PerturbationSchedule
+  Jour 3-4  : DynamicsWrapper + PerturbationSchedule (stub)
   Jour 5    : Spectral + début notebook validation
 
-Semaine 2 ─────────────────────────────────────────
+Semaine 2 ──────────────────────────────── ✅ DONE
   Jour 6-7  : Finaliser notebook 01, tous tests Phase 1
   Jour 8-10 : ★ MetaSR — composant principal
+              → CP1 PASSED (notebook 01 + 6 checks automatisés)
 
-Semaine 3 ─────────────────────────────────────────
+Semaine 3 ──────────────────────────────── ✅ DONE
   Jour 11-12 : Controller + PRISMAgent
   Jour 13-14 : Calibration.py + visualisation.py
-  Jour 15    : Baselines Exp A
+  Jour 15    : Baselines Exp A (stubs seulement)
 
-Semaine 4 ─────────────────────────────────────────
-  Jour 16    : Sweep hyperparamètres
-  Jour 17-19 : ★ Exécuter Exp A (100 runs × 5 conditions)
-  Jour 20    : Analyser résultats Exp A, notebook 02
+Semaine 4 ──────────────────────────────── ⏳ PARTIEL
+  Jour 16    : Sweep hyperparamètres        → reporté Phase 3
+  Jour 17-19 : ★ Exécuter Exp A             → reporté Phase 3
+  Jour 20    : Analyser résultats Exp A     → reporté Phase 3
+  ✅ FAIT : calibration.py, checkpoints.md, mise à jour docs
 
-Semaine 5 ─────────────────────────────────────────
-  BUFFER — rattraper le retard, itérer sur Exp A si ECE > 0.15
-  Debug, ajustement hyperparamètres, runs supplémentaires
+Semaine 5 ──────────────────────────────── À VENIR
+  Compléter stubs (baselines, perturbation_schedule, metrics)
+  Installer stable-baselines3
+  Sweep hyperparamètres (§2.7)
+  → CP2 : valider hyperparamètres choisis
 
-Semaine 6 ─────────────────────────────────────────
-  Jour 26-27 : Config grand monde Exp B + baselines
-  Jour 28-30 : ★ Exécuter Exp B (100 runs × 8 conditions)
+Semaine 6 ──────────────────────────────── À VENIR
+  ★ Exécuter Exp A (100 runs × 5 conditions)
+  Analyser résultats, notebook 02
+  → CP3 : valider calibration métacognitive
 
-Semaine 7 ─────────────────────────────────────────
-  Jour 31-32 : SB3 wrapper + baselines Exp C
-  Jour 33-35 : ★ Exécuter Exp C (100 runs × 3 conditions)
+Semaine 7 ──────────────────────────────── À VENIR
+  Config grand monde Exp B + baselines Exp B
+  ★ Exécuter Exp B (100 runs × 8 conditions)
+  → CP4 : valider exploration dirigée
 
-Semaine 8 ─────────────────────────────────────────
-  Jour 36-38 : Analyse croisée, figures finales, notebook 03
-  Jour 39-40 : Rédaction rapport de résultats
+Semaine 8 ──────────────────────────────── À VENIR
+  SB3 wrapper + baselines Exp C
+  ★ Exécuter Exp C (100 runs × 3 conditions)
+  → CP5 : valider adaptation au changement
+
+Semaine 9 (buffer) ────────────────────── À VENIR
+  Analyse croisée, figures finales, notebook 03
+  Rédaction rapport de résultats
 ```
 
 ---
 
 ## Risques et plans de contingence
 
-| Risque | Impact | Probabilité | Mitigation |
-|--------|--------|-------------|------------|
-| ECE > 0.15 même après sweep | Bloquant pour P1 | Moyenne | Ajuster τ_accuracy, tester d'autres fonctions de normalisation de U, envisager température scaling post-hoc |
-| MI < 0.5 | Affaiblit la thèse iso-structurale | Moyenne | Analyser si le problème est la compression scalaire ; tester U vectoriel sur un sous-ensemble |
-| MiniGrid FourRooms trop petit (< 100 états) | Statistiques pauvres sur les bins ECE | Faible | Utiliser une grille plus grande (11×11 au lieu de default) |
-| DynamicsWrapper incompatible avec SB3 | Bloque baseline Q-learning Exp C | Faible | Implémenter un Q-learning tabulaire custom (simple) |
-| Temps de calcul 810 runs sweep | Retard Phase 2 | Moyenne | Réduire à 27 configs (3³) en fixant U_prior=0.8 d'abord |
-| Asymétrie R/M hors plage 15-40× | Signature SR non confirmée | Faible | Analyser les causes, ajuster les learning rates, discuter |
-| PRISM ≈ SR-Count-Bonus (pas de gain structure) | Affaiblit P3 | Moyenne | Analyser les conditions où la structure aide vs. pas (topologies simples vs. complexes) |
+| Risque | Impact | Probabilité | Mitigation | Statut |
+|--------|--------|-------------|------------|--------|
+| ECE > 0.15 même après sweep | Bloquant pour P1 | Moyenne | Ajuster τ_accuracy, tester d'autres fonctions de normalisation de U, envisager température scaling post-hoc | OUVERT |
+| MI < 0.5 | Affaiblit la thèse iso-structurale | Moyenne | Analyser si le problème est la compression scalaire ; tester U vectoriel sur un sous-ensemble | OUVERT |
+| MiniGrid FourRooms trop petit (< 100 états) | Statistiques pauvres sur les bins ECE | Faible | Utiliser une grille plus grande (11×11 au lieu de default) | **RÉSOLU** — FourRooms = 19×19 = 260 états accessibles |
+| DynamicsWrapper incompatible avec SB3 | Bloque baseline Q-learning Exp C | Faible | Implémenter un Q-learning tabulaire custom (simple) | MITIGÉ — fallback tabulaire prévu |
+| Temps de calcul 810 runs sweep | Retard Phase 2 | Moyenne | Réduire à 27 configs (3³) en fixant U_prior=0.8 d'abord | OUVERT |
+| Asymétrie R/M hors plage 15-40× | Signature SR non confirmée | Faible | Analyser les causes, ajuster les learning rates, discuter | OUVERT |
+| PRISM ≈ SR-Count-Bonus (pas de gain structure) | Affaiblit P3 | Moyenne | Analyser les conditions où la structure aide vs. pas (topologies simples vs. complexes) | OUVERT |
 
 ---
 
 ## Checklist de livraison finale
 
-- [ ] Tous les tests unitaires passent (`pytest tests/`)
-- [ ] 3 expériences exécutées avec 100 runs chacune
-- [ ] Analyses statistiques complètes (p-values, CI, effect sizes)
-- [ ] 10 figures principales générées
-- [ ] Notebook 01 : validation SR ✓
-- [ ] Notebook 02 : démo méta-SR ✓
-- [ ] Notebook 03 : analyse finale ✓
-- [ ] Code reproductible (seeds fixés, `run_all.py` fonctionne)
-- [ ] `README.md` avec instructions d'installation et reproduction
-- [ ] Rapport de résultats rédigé
+- [x] Tous les tests unitaires passent (`pytest tests/`) — 141 tests ✅
+- [ ] 3 expériences exécutées avec 100 runs chacune → Phase 3
+- [ ] Analyses statistiques complètes (p-values, CI, effect sizes) → Phase 3
+- [ ] 10 figures principales générées → Phase 3
+- [x] Notebook 01 : validation SR ✅ (+ CP1 go/no-go intégré)
+- [ ] Notebook 02 : démo méta-SR → Phase 3
+- [ ] Notebook 03 : analyse finale → Phase 3
+- [ ] Code reproductible (seeds fixés, `run_all.py` fonctionne) → Phase 3
+- [x] `README.md` avec instructions d'installation et reproduction ✅
+- [ ] Rapport de résultats rédigé → Phase 3
+- [ ] 5 checkpoints humains validés (CP1 ✅, CP2-CP5 → Phase 3)
+
+---
+
+## Checkpoints humains
+
+Système de validation humaine à chaque étape clé. Détails complets dans `checkpoints.md`.
+
+| CP | Nom | Quand | Critères clés | Statut |
+|----|-----|-------|---------------|--------|
+| CP1 | Validation SR de base | Fin Phase 1 | ‖ΔM‖ < 0.1, rang > 50%, eigenvalue > 1, ECE < 0.30, MI > 0 | ✅ PASSED |
+| CP2 | Hyperparamètres méta-SR | Après sweep (§2.7) | ECE < 0.15 pour top config, stabilité inter-runs | ⏳ À VENIR |
+| CP3 | Calibration métacognitive | Après Exp A (§2.8) | ECE < 0.15, MI > 0.5, PRISM < baselines (p < 0.05) | ⏳ À VENIR |
+| CP4 | Exploration dirigée | Après Exp B (§3.3) | PRISM < ε-greedy (−30%), PRISM < Count-Bonus (p < 0.05) | ⏳ À VENIR |
+| CP5 | Adaptation au changement | Après Exp C (§3.4) | Détection < 10 épisodes, asymétrie R/M 15-40× | ⏳ À VENIR |
+
+**Ordre des tâches Phase 3 avec checkpoints intercalés :**
+
+1. Compléter stubs (baselines, perturbation_schedule, metrics)
+2. Sweep hyperparamètres → **CP2**
+3. Exécuter Exp A → **CP3**
+4. Config grand monde + baselines Exp B
+5. Exécuter Exp B → **CP4**
+6. SB3/tabulaire wrapper + Exp C → **CP5**
+7. Analyse croisée, figures, notebook 03, rapport

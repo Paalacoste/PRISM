@@ -94,8 +94,12 @@ class PRISMAgent:
         pos = tuple(self.env.unwrapped.agent_pos)
         return self.mapper.get_index(pos)
 
-    def train_episode(self) -> dict:
+    def train_episode(self, env_seed=None) -> dict:
         """Run one episode. Returns metrics dict.
+
+        Args:
+            env_seed: Seed for env.reset(). Required for MiniGrid envs
+                where wall positions change per seed (e.g. FourRooms).
 
         Metrics:
             episode_reward: Total reward for the episode.
@@ -107,7 +111,7 @@ class PRISMAgent:
             change_detected: Whether change was detected this episode.
             reached_goal: Whether the agent reached the goal.
         """
-        obs, info = self.env.reset()
+        obs, info = self.env.reset(seed=env_seed)
         s = self._get_state()
 
         episode_reward = 0.0
@@ -121,9 +125,10 @@ class PRISMAgent:
         while not done:
             visited_states.add(s)
 
-            # Select action
+            # Select action (pass agent direction for greedy V_explore)
+            agent_dir = self.env.unwrapped.agent_dir
             action, confidence, idk_flag = self.controller.select_action(
-                s, MOVEMENT_ACTIONS
+                s, MOVEMENT_ACTIONS, agent_dir=agent_dir
             )
             confidences.append(confidence)
             uncertainties.append(self.meta_sr.uncertainty(s))
@@ -160,18 +165,21 @@ class PRISMAgent:
         self.history.append(metrics)
         return metrics
 
-    def train(self, n_episodes: int, log_every: int = 50, progress: bool = True):
+    def train(self, n_episodes: int, log_every: int = 50, progress: bool = True,
+              env_seed=None):
         """Full training loop.
 
         Args:
             n_episodes: Number of episodes to train.
             log_every: Print summary every N episodes.
             progress: Show tqdm progress bar.
+            env_seed: Seed for env.reset() each episode. Required for
+                MiniGrid envs where wall positions change per seed.
         """
         iterator = trange(n_episodes, desc="Training") if progress else range(n_episodes)
 
         for ep in iterator:
-            metrics = self.train_episode()
+            metrics = self.train_episode(env_seed=env_seed)
 
             if progress and ep % log_every == 0:
                 iterator.set_postfix(

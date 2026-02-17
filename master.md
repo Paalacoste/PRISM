@@ -518,74 +518,96 @@ Ce design teste la prédiction SR classique (Momennejad 2017) : l'adaptation au 
 
 ```
 Python 3.11+
-minigrid >= 2.3         # environnement FourRooms (Farama)
-gymnasium >= 0.29       # interface standard RL
-numpy >= 1.24
-scipy >= 1.11           # décomposition spectrale
+minigrid >= 2.3, < 3.0  # environnement FourRooms (Farama)
+gymnasium >= 0.29, < 1.0 # interface standard RL
+numpy >= 1.24, < 2.0     # pinné < 2.0 pour compatibilité MiniGrid
+scipy >= 1.11            # décomposition spectrale
 matplotlib >= 3.7
-seaborn                 # reliability diagrams, heatmaps
-pandas                  # logging des résultats
-tqdm                    # progress bars
-pytest                  # tests
-stable-baselines3       # baselines Q-learning / DQN
+seaborn >= 0.12          # reliability diagrams, heatmaps
+pandas >= 2.0            # logging des résultats
+tqdm >= 4.65             # progress bars
+pytest >= 7.0            # tests
 ```
+
+> **Note :** `stable-baselines3` est différé à Phase 3 (baseline Q-learning Exp C).
+> Un fallback Q-learning tabulaire est prévu si SB3 pose des problèmes de compatibilité.
 
 ### 7.2 Structure du projet
 
 ```
-prism/
+PRISM/
 ├── master.md                          # ← ce document
 ├── README.md
 ├── requirements.txt
+├── checkpoints.md                     # Protocoles de validation humaine CP1-CP5
 │
-├── src/
+├── prism/                             # Package Python principal
 │   ├── __init__.py
+│   ├── config.py                      # [DONE] Hyperparamètres centralisés (PRISMConfig)
 │   │
 │   ├── env/
 │   │   ├── __init__.py
-│   │   ├── dynamics_wrapper.py        # [À CODER] Wrapper perturbations sur MiniGrid
-│   │   ├── state_mapper.py            # [À CODER] Mapping position MiniGrid → index SR
-│   │   └── perturbation_schedule.py   # [À CODER] Configs de schedules
+│   │   ├── state_mapper.py            # [DONE] Mapping position MiniGrid → index SR (260 états)
+│   │   ├── dynamics_wrapper.py        # [DONE] Wrapper perturbations sur MiniGrid
+│   │   ├── exploration_task.py        # [DONE] ExplorationTaskWrapper, place_goals, get_room_cells
+│   │   └── perturbation_schedule.py   # [STUB Phase 3] Configs de schedules (exp_a/c)
 │   │
 │   ├── agent/
 │   │   ├── __init__.py
-│   │   ├── sr_layer.py                # [ADAPTÉ] SR tabulaire (depuis Juliani 2019)
-│   │   ├── meta_sr.py                 # [À CODER] ★ Carte U(s), signal C(s), détection
-│   │   ├── controller.py              # [À CODER] ★ ε adaptatif, V_explore, "je ne sais pas"
-│   │   └── prism_agent.py             # [À CODER] ★ Agent complet assemblant les couches
+│   │   ├── sr_layer.py                # [DONE] SR tabulaire (depuis Juliani 2019)
+│   │   ├── meta_sr.py                 # [DONE] ★ Carte U(s), signal C(s), détection
+│   │   ├── controller.py              # [DONE] ★ ε adaptatif, V_explore greedy, "je ne sais pas"
+│   │   └── prism_agent.py             # [DONE] ★ Agent complet assemblant les couches
 │   │
 │   ├── baselines/
 │   │   ├── __init__.py
-│   │   ├── sr_blind.py                # [À CODER] SR sans méta-monitoring
-│   │   ├── sr_count.py                # [À CODER] SR + count-based bonus
-│   │   ├── sr_bayesian.py             # [À CODER] SR + régression bayésienne (Janz-like)
-│   │   └── sb3_baselines.py           # [WRAPPER] Q-learning via Stable-Baselines3
+│   │   ├── base_agent.py              # [DONE] BaseSRAgent + RandomAgent (navigation MiniGrid)
+│   │   ├── sr_blind.py                # [DONE] SREpsilonGreedy + SREpsilonDecay
+│   │   ├── sr_count.py                # [DONE] SRCountBonus + SRNormBonus
+│   │   ├── sr_bayesian.py             # [DONE] SRPosterior (Thompson sampling)
+│   │   ├── sr_oracle.py               # [DONE] SROracle (bonus = ||M - M*||)
+│   │   └── sb3_baselines.py           # [STUB Phase 3] Q-learning via Stable-Baselines3
 │   │
-│   └── analysis/
-│       ├── __init__.py
-│       ├── calibration.py             # [À CODER] ★ ECE, reliability diagrams, MI
-│       ├── spectral.py                # [ADAPTÉ] Eigenvectors M (depuis Chelu)
-│       ├── visualization.py           # [À CODER] Heatmaps U/M superposées, animations
-│       └── metrics.py                 # [À CODER] Exploration efficiency, latence, etc.
+│   ├── analysis/
+│   │   ├── __init__.py
+│   │   ├── calibration.py             # [DONE] ★ ECE, reliability diagrams, MI
+│   │   ├── spectral.py                # [DONE] Eigenvectors M (depuis Chelu)
+│   │   ├── visualization.py           # [DONE] Heatmaps U/M superposées (animation Phase 3)
+│   │   └── metrics.py                 # [DONE] bootstrap_ci, mann_whitney, holm_bonferroni, compare_conditions
+│   │
+│   └── pedagogy/
+│       └── toy_grid.py                # [DONE] Grille légère pour notebooks (sans MiniGrid)
 │
 ├── experiments/
-│   ├── exp_a_calibration.py           # Exp A — calibration métacognitive
-│   ├── exp_b_exploration.py           # Exp B — exploration dirigée
-│   ├── exp_c_adaptation.py            # Exp C — adaptation au changement
-│   └── run_all.py                     # Script batch
+│   ├── __init__.py
+│   ├── exp_b_exploration.py           # [DONE] Exp B — exploration dirigée (8 conditions)
+│   ├── exp_a_calibration.py           # [STUB Phase 3] Exp A — calibration métacognitive
+│   ├── exp_c_adaptation.py            # [STUB Phase 3] Exp C — adaptation au changement
+│   └── run_all.py                     # [STUB Phase 3] Script batch
 │
 ├── notebooks/
-│   ├── 01_sr_validation.ipynb         # Vérification que la SR converge (sanity check)
-│   ├── 02_meta_sr_demo.ipynb          # Visualisation méta-SR interactive
-│   └── 03_results_analysis.ipynb      # Analyse + figures finales
+│   ├── 00_prism_concepts.ipynb        # [DONE] Introduction pédagogique aux concepts PRISM
+│   ├── 00a_spectral_deep_dive.ipynb   # [DONE] Analyse spectrale de la SR
+│   ├── 00b_calibration_methods.ipynb  # [DONE] Méthodes de calibration
+│   ├── 01_sr_validation.ipynb         # [DONE] Validation SR + CP1 go/no-go (9 sections)
+│   └── 02_experiment_tracking.ipynb   # [TODO] Suivi et analyse Exp B
 │
-├── tests/
-│   ├── test_dynamics_wrapper.py
-│   ├── test_sr_layer.py
-│   ├── test_meta_sr.py
-│   └── test_calibration.py
+├── tests/                             # 141 tests, 9 fichiers
+│   ├── __init__.py
+│   ├── conftest.py                    # Fixtures partagées (env, mapper)
+│   ├── test_imports.py                # Vérification imports package
+│   ├── test_env_smoke.py              # Smoke tests MiniGrid
+│   ├── test_state_mapper.py           # Tests StateMapper (260 états, bijection)
+│   ├── test_sr_layer.py               # Tests SR Layer (convergence, update)
+│   ├── test_dynamics_wrapper.py       # Tests DynamicsWrapper (perturbations)
+│   ├── test_meta_sr.py                # Tests MetaSR (uncertainty, confidence, change)
+│   ├── test_calibration.py            # Tests calibration (ECE, MI, reliability)
+│   └── test_baselines.py              # Tests baselines + metrics + goal placement (44 tests)
 │
-└── results/                           # Généré automatiquement
+├── scripts/
+│   └── verify_env.py                  # Vérification environnement Python
+│
+└── results/                           # Généré automatiquement (.gitignored)
     ├── exp_a/
     ├── exp_b/
     └── exp_c/
@@ -593,53 +615,71 @@ prism/
 
 **Légende :**
 - ★ = contribution PRISM (code original)
-- [ADAPTÉ] = adapté depuis code open-source existant
-- [WRAPPER] = mince couche d'intégration sur une librairie existante
-- [À CODER] sans ★ = code de plomberie nécessaire mais pas innovant
+- [DONE] = implémenté et testé (Phases 0-2)
+- [STUB Phase 3] = fichier existe avec interface, implémentation en Phase 3
 
-**Ratio estimé :** ~40% code original (méta-SR, calibration, contrôleur), ~30% adapté, ~30% wrappers et intégration.
+**Compteur :** 141 tests passent, 20 modules Python, 4 notebooks (+1 en cours).
+
+> **Note :** Les baselines (Palier 1 Exp B) et `metrics.py` ont été implémentés en Phase 3.
+> Une 9e condition `SR-Count-Matched` est prévue pour le Palier 2 d'Exp B.
 
 ---
 
 ## 8. Plan d'implémentation
 
-### Phase 1 — Assemblage (semaines 1-2)
+### Phase 1 — Assemblage (semaines 1-2) — ✅ DONE
 
 Objectif : agent SR fonctionnel dans MiniGrid, zéro contribution originale.
 
-- [ ] Installer MiniGrid, vérifier FourRooms fonctionne
-- [ ] `state_mapper.py` — mapping position MiniGrid → index pour matrice SR
-- [ ] `sr_layer.py` — adapter l'implémentation SR tabulaire de Juliani
-- [ ] `dynamics_wrapper.py` — wrapper perturbations (reward shift, door block)
-- [ ] `spectral.py` — adapter le code de visualisation eigenvectors (Chelu)
-- [ ] Notebook `01_sr_validation.ipynb` — sanity check : SR converge, eigenvectors ok
-- [ ] Tests unitaires : wrapper, SR layer, state mapper
+- [x] Installer MiniGrid, vérifier FourRooms fonctionne
+- [x] `state_mapper.py` — mapping position MiniGrid → index pour matrice SR
+- [x] `sr_layer.py` — adapter l'implémentation SR tabulaire de Juliani
+- [x] `dynamics_wrapper.py` — wrapper perturbations (reward shift, door block)
+- [x] `spectral.py` — adapter le code de visualisation eigenvectors (Chelu)
+- [x] Notebook `01_sr_validation.ipynb` — sanity check : SR converge, eigenvectors ok
+- [x] Tests unitaires : wrapper, SR layer, state mapper
 
-**Milestone :** L'agent SR navigue vers le goal dans FourRooms. Les heatmaps de M et les eigenvectors sont cohérents avec Stachenfeld 2017.
+> **Notes d'implémentation :**
+> - FourRooms = 19×19, **260 états** accessibles (pas ~100 comme anticipé)
+> - `agent_pos` est un tuple `(x, y)`, pas un int — nécessite `to_grid()` dans StateMapper
+> - `max_steps=500` obligatoire pour éviter la troncation silencieuse
+> - Pas de portes dans MiniGrid v2.5 (passages ouverts entre les pièces)
 
-### Phase 2 — Méta-SR et calibration (semaines 3-5) ★
+**Milestone :** ✅ L'agent SR navigue vers le goal dans FourRooms. Les heatmaps de M et les eigenvectors sont cohérents avec Stachenfeld 2017.
+→ **CP1 PASSED** (6 checks automatisés dans notebook 01)
+
+### Phase 2 — Méta-SR et calibration (semaines 3-5) ★ — ⏳ PARTIELLEMENT DONE
 
 Objectif : implémenter la contribution principale et exécuter l'Exp A.
 
-- [ ] `meta_sr.py` — buffer d'erreurs, carte U(s), signal C(s), détection
-- [ ] `controller.py` — ε adaptatif, V_explore, signal "je ne sais pas"
-- [ ] `prism_agent.py` — assemblage agent complet
-- [ ] `calibration.py` — ECE, reliability diagrams, Metacognitive Index
-- [ ] `visualization.py` — superposition U/M, animations
-- [ ] Baselines : `sr_blind.py`, `sr_count.py`, `sr_bayesian.py`
-- [ ] **Sweep hyperparamètres méta-SR** — 81 configs, critère ECE minimal (voir §5.4)
-- [ ] **Exécuter Exp A** — calibration métacognitive
-- [ ] Notebook `02_meta_sr_demo.ipynb`
+- [x] `meta_sr.py` — buffer d'erreurs, carte U(s), signal C(s), détection
+- [x] `controller.py` — ε adaptatif, V_explore, signal "je ne sais pas"
+- [x] `prism_agent.py` — assemblage agent complet
+- [x] `calibration.py` — ECE, reliability diagrams, Metacognitive Index
+- [x] `visualization.py` — superposition U/M, animations
+- [ ] Baselines : `sr_blind.py`, `sr_count.py`, `sr_bayesian.py` — stubs seulement
+- [ ] **Sweep hyperparamètres méta-SR** — reporté Phase 3 → CP2
+- [ ] **Exécuter Exp A** — reporté Phase 3 → CP3
+- [ ] Notebook `02_meta_sr_demo.ipynb` — reporté Phase 3
 
-**Milestone :** PRISM produit un signal de confiance calibré (ECE < 0.15). Le reliability diagram montre une corrélation positive. MI > 0.5.
+> **Notes d'implémentation :**
+> - MetaSR utilise normalisation p99 adaptative (pas min-max naïf)
+> - L'action exploit du controller est random (pas V_explore voisins comme prévu)
+> - `prism_agent.py` intègre `config.py` (PRISMConfig) pour centraliser les hyperparamètres
+> - `hosmer_lemeshow_test()` manquant dans calibration.py — à créer en Phase 3
 
-### Phase 3 — Exploration et adaptation (semaines 6-8) ★
+**Milestone :** Composants logiciels implémentés et testés (97 tests). Exp A et sweep reportés Phase 3.
+
+### Phase 3 — Exploration et adaptation (semaines 6-8) ★ — À VENIR
 
 Objectif : exécuter les Exp B et C, comparaisons avec baselines.
 
+- [ ] Compléter stubs Phase 2 (baselines, perturbation_schedule, metrics)
+- [ ] **Sweep hyperparamètres** (depuis Phase 2) → CP2
+- [ ] **Exécuter Exp A** (depuis Phase 2) → CP3
 - [ ] Config grand monde pour Exp B (19×19, 4+ pièces, 4 goals cachés)
-- [ ] **Exécuter Exp B** — exploration dirigée, toutes conditions
-- [ ] **Exécuter Exp C** — adaptation au changement (perturbations R puis M)
+- [ ] **Exécuter Exp B** — exploration dirigée, toutes conditions → CP4
+- [ ] **Exécuter Exp C** — adaptation au changement (perturbations R puis M) → CP5
 - [ ] `sb3_baselines.py` — wrapper Stable-Baselines3 pour Q-learning baseline
 - [ ] SR-Oracle baseline (utilise M* comme signal — plafond théorique Exp B)
 - [ ] Analyse croisée des 3 expériences
@@ -648,9 +688,25 @@ Objectif : exécuter les Exp B et C, comparaisons avec baselines.
 
 **Milestone :** PRISM bat les baselines sur l'exploration. L'asymétrie R/M confirme la signature SR. La calibration se maintient en dynamique.
 
+### 8.5 Système de checkpoints
+
+Validation humaine à chaque étape clé. Protocoles détaillés dans `checkpoints.md`.
+
+| CP | Nom | Phase | Critères clés | Statut |
+|----|-----|-------|---------------|--------|
+| CP1 | Validation SR de base | Fin Phase 1 | ‖ΔM‖ < 0.1, rang > 50%, ECE < 0.30, MI > 0 | ✅ PASSED |
+| CP2 | Hyperparamètres méta-SR | Phase 3 (sweep) | ECE < 0.15, stabilité inter-runs | ⏳ À VENIR |
+| CP3 | Calibration métacognitive | Phase 3 (Exp A) | ECE < 0.15, MI > 0.5, PRISM < baselines | ⏳ À VENIR |
+| CP4 | Exploration dirigée | Phase 3 (Exp B) | PRISM −30% vs ε-greedy, < Count-Bonus | ⏳ À VENIR |
+| CP5 | Adaptation au changement | Phase 3 (Exp C) | Détection < 10 épisodes, asymétrie 15-40× | ⏳ À VENIR |
+
 ---
 
 ## 9. Métriques globales
+
+> **Status :** Cibles définies, pas encore testées expérimentalement.
+> Seul CP1 a validé les métriques de base (ECE < 0.30, MI > 0).
+> Les cibles ci-dessous seront évaluées en Phase 3 (Exp A/B/C).
 
 ### Tableau de bord
 
@@ -764,4 +820,4 @@ Objectif : exécuter les Exp B et C, comparaisons avec baselines.
 
 ---
 
-*Dernière mise à jour : 2026-02-14*
+*Dernière mise à jour : 2026-02-14 — Phases 0-2 DONE, Phase 3 À VENIR*

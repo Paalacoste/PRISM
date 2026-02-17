@@ -62,12 +62,15 @@ class PRISMController:
         U_s = self.meta_sr.uncertainty(s)
         return V_s + self.lambda_explore * U_s
 
-    def select_action(self, s: int, available_actions: list[int]) -> tuple[int, float, bool]:
+    def select_action(self, s: int, available_actions: list[int],
+                      agent_dir: int | None = None) -> tuple[int, float, bool]:
         """Select an action using adaptive epsilon-greedy on V_explore.
 
         Args:
             s: Current state index.
             available_actions: List of valid action indices.
+            agent_dir: Agent's current facing direction (0-3). Required for
+                       greedy action selection in MiniGrid.
 
         Returns:
             Tuple of (action, confidence, idk_flag):
@@ -80,21 +83,49 @@ class PRISMController:
         epsilon = self.adaptive_epsilon(s)
 
         if self._rng.random() < epsilon:
-            # Explore: random action
             action = self._rng.choice(available_actions)
+        elif agent_dir is not None:
+            action = self._greedy_v_explore(s, agent_dir, available_actions)
         else:
-            # Exploit: greedy on V_explore for reachable states
-            # For MiniGrid movement actions (0=left, 1=right, 2=forward),
-            # we evaluate the exploration value of the current state
-            # since we don't know next states without simulating.
-            # Use simple greedy on V(s) with exploration bonus.
             action = self._rng.choice(available_actions)
 
-            # If we have neighbor information, prefer highest V_explore
-            # For now, use the fact that action 2 (forward) is the only
-            # action that changes position — prefer it when V_explore is high
-            if 2 in available_actions and len(available_actions) > 1:
-                # Forward has the potential to reach a new state
-                action = int(self._rng.choice(available_actions))
+        return (int(action), float(confidence), bool(idk_flag))
 
-        return (action, float(confidence), bool(idk_flag))
+    def _greedy_v_explore(self, s: int, agent_dir: int,
+                          available_actions: list[int]) -> int:
+        """Pick action leading to the highest V_explore neighbor.
+
+        Evaluates V_explore for each of the 4 cardinal neighbors,
+        then returns the MiniGrid action to move towards the best one.
+        """
+        # MiniGrid direction vectors: 0=right, 1=down, 2=left, 3=up
+        dir_vec = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+        pos = self.mapper.get_pos(s)
+
+        candidates = []
+        for d in range(4):
+            dx, dy = dir_vec[d]
+            nx, ny = pos[0] + dx, pos[1] + dy
+            try:
+                s_neighbor = self.mapper.get_index((nx, ny))
+                v = self.exploration_value(s_neighbor)
+                candidates.append((d, v))
+            except KeyError:
+                pass  # wall
+
+        if not candidates:
+            return int(self._rng.choice(available_actions))
+
+        # Best direction with random tie-breaking
+        best_value = max(v for _, v in candidates)
+        best_dirs = [d for d, v in candidates if np.isclose(v, best_value)]
+        best_dir = int(self._rng.choice(best_dirs))
+
+        # Convert desired direction to MiniGrid action
+        if best_dir == agent_dir:
+            return 2  # forward
+        if (agent_dir - 1) % 4 == best_dir:
+            return 0  # turn left
+        if (agent_dir + 1) % 4 == best_dir:
+            return 1  # turn right
+        return 0  # 180 turn — turn left

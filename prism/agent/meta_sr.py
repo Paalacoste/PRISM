@@ -57,6 +57,8 @@ class MetaSR:
 
         # Running normalization for delta scalars
         self._all_deltas = deque(maxlen=5000)
+        self._p99_cache = 0.0
+        self._observe_count = 0
 
         # Recent visit tracking for change detection
         self._recent_visits = deque(maxlen=50)
@@ -76,10 +78,14 @@ class MetaSR:
 
         # Store raw delta for running normalization
         self._all_deltas.append(delta_scalar)
+        self._observe_count += 1
 
         # Normalize to [0, 1] via adaptive percentile clipping
         if len(self._all_deltas) >= 10:
-            p99 = np.percentile(list(self._all_deltas), 99)
+            # Recompute p99 every 100 steps (expensive on large deque)
+            if self._observe_count % 100 == 0 or self._p99_cache == 0.0:
+                self._p99_cache = float(np.percentile(list(self._all_deltas), 99))
+            p99 = self._p99_cache
             if p99 > 0:
                 delta_normalized = min(delta_scalar / p99, 1.0)
             else:
