@@ -14,6 +14,8 @@ References:
     master.md section 6.1
 """
 
+import warnings
+
 import numpy as np
 from scipy import stats
 
@@ -183,6 +185,54 @@ def plot_reliability_diagram(confidences, accuracies, n_bins=10, ax=None):
     return fig
 
 
+def hosmer_lemeshow_test(confidences, accuracies, n_bins=10):
+    """Hosmer-Lemeshow goodness-of-fit test for calibration.
+
+    Bins observations by confidence quantiles, computes chi-squared statistic
+    comparing observed vs expected accuracies per bin.
+
+    Args:
+        confidences: Array of confidence values in [0, 1].
+        accuracies: Binary array (0 or 1) of same length.
+        n_bins: Number of quantile bins (default 10).
+
+    Returns:
+        Tuple (chi2_stat, p_value). p > 0.05 means calibration is acceptable.
+    """
+    confidences = np.asarray(confidences, dtype=float)
+    accuracies = np.asarray(accuracies, dtype=float)
+    N = len(confidences)
+
+    if N < n_bins:
+        return (0.0, 1.0)
+
+    # Bin by quantiles of confidence
+    bin_edges = np.quantile(confidences, np.linspace(0, 1, n_bins + 1))
+    bin_edges[-1] += 1e-10  # include right edge
+
+    chi2 = 0.0
+    df = 0  # degrees of freedom = number of non-empty bins - 2
+
+    for i in range(n_bins):
+        mask = (confidences >= bin_edges[i]) & (confidences < bin_edges[i + 1])
+        n_b = mask.sum()
+        if n_b == 0:
+            continue
+        pi_b = confidences[mask].mean()  # expected probability
+        o_b = accuracies[mask].sum()     # observed successes
+        e_b = n_b * pi_b                 # expected successes
+
+        denom = n_b * pi_b * (1 - pi_b)
+        if denom > 0:
+            chi2 += (o_b - e_b) ** 2 / denom
+            df += 1
+
+    df = max(df - 2, 1)  # HL df = n_groups - 2
+    p_value = float(1.0 - stats.chi2.cdf(chi2, df))
+
+    return (float(chi2), p_value)
+
+
 def metacognitive_index(U, M, M_star):
     """Compute Metacognitive Index: Spearman correlation between U and true error.
 
@@ -202,5 +252,7 @@ def metacognitive_index(U, M, M_star):
     if np.std(U) == 0 or np.std(errors) == 0:
         return (0.0, 1.0)
 
-    rho, p_value = stats.spearmanr(U, errors)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", stats.ConstantInputWarning)
+        rho, p_value = stats.spearmanr(U, errors)
     return (float(rho), float(p_value))

@@ -15,6 +15,8 @@ import csv
 import json
 import os
 import time
+from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -38,8 +40,12 @@ from prism.baselines import (
     SRNormBonus,
     SRPosterior,
     SROracle,
+    SRCountMatched,
 )
-from prism.analysis.metrics import bootstrap_ci, compare_conditions
+from prism.baselines.sr_count_matched import calibrate_u_profile
+from prism.analysis.metrics import (
+    bootstrap_ci, compare_conditions, compute_discovery_auc,
+)
 
 
 # MiniGrid movement actions
@@ -104,7 +110,7 @@ class PRISMExpBAgent:
 # Single episode runner
 # ---------------------------------------------------------------------------
 def run_single_episode(env, agent, state_mapper, goal_positions, max_steps,
-                       env_seed):
+                       env_seed, log_bonus=False):
     """Run one exploration episode. Returns metrics dict.
 
     Args:
@@ -114,10 +120,12 @@ def run_single_episode(env, agent, state_mapper, goal_positions, max_steps,
         goal_positions: list of (x, y) goal positions.
         max_steps: Maximum steps before forced stop.
         env_seed: Fixed seed for env.reset() (preserves grid structure).
+        log_bonus: If True, collect (state, bonus) per step for guidance index.
 
     Returns:
         dict with: steps, goals_found, all_found, coverage, redundancy,
                    discovery_times (list of ints, max_steps if not found).
+                   If log_bonus: also 'bonus_log' list of (state, bonus).
     """
     # Always use the same env seed to preserve grid structure (wall positions).
     # FourRooms randomizes passage locations per seed, so changing the seed
@@ -138,11 +146,15 @@ def run_single_episode(env, agent, state_mapper, goal_positions, max_steps,
     discovery_times = {}
     visited_states = set()
     step = 0
+    bonus_log = [] if log_bonus else None
 
     s = state_mapper.get_index(tuple(env.unwrapped.agent_pos))
 
     for step in range(1, max_steps + 1):
         visited_states.add(s)
+
+        if log_bonus and hasattr(agent, "exploration_bonus"):
+            bonus_log.append((s, agent.exploration_bonus(s)))
 
         agent_dir = env.unwrapped.agent_dir
         action = agent.select_action(s, MOVEMENT_ACTIONS, agent_dir)
@@ -172,7 +184,7 @@ def run_single_episode(env, agent, state_mapper, goal_positions, max_steps,
     disc_list = [discovery_times.get(tuple(g), max_steps + 1)
                  for g in sorted_goals]
 
-    return {
+    result = {
         "steps": step,
         "goals_found": len(discovered),
         "all_found": len(discovered) == len(goal_set),
@@ -180,12 +192,16 @@ def run_single_episode(env, agent, state_mapper, goal_positions, max_steps,
         "redundancy": step / max(len(visited_states), 1),
         "discovery_times": disc_list,
     }
+    if log_bonus:
+        result["bonus_log"] = bonus_log
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Condition factory
 # ---------------------------------------------------------------------------
-def make_agent(condition, n_states, state_mapper, M_star, seed):
+def make_agent(condition, n_states, state_mapper, M_star, seed,
+               u_profile=None):
     """Create an agent for the given condition name."""
     common = dict(n_states=n_states, state_mapper=state_mapper, seed=seed)
 
@@ -204,6 +220,10 @@ def make_agent(condition, n_states, state_mapper, M_star, seed):
         return SRNormBonus(epsilon=0.1, **common)
     elif condition == "SR-Posterior":
         return SRPosterior(epsilon=0.1, **common)
+    elif condition == "SR-Count-Matched":
+        if u_profile is None:
+            raise ValueError("SR-Count-Matched requires u_profile")
+        return SRCountMatched(u_profile=u_profile, epsilon=0.1, **common)
     elif condition == "Random":
         return RandomAgent(**common)
     else:
@@ -221,20 +241,63 @@ CONDITIONS = [
     "SR-Count-Bonus",
     "SR-Norm-Bonus",
     "SR-Posterior",
+    "SR-Count-Matched",
     "Random",
 ]
 
 
+def _run_condition(args):
+    """Worker function: run all episodes for one condition (picklable)."""
+    (cond_name, n_runs, max_steps, seed, n_conditions, cond_index,
+     M_star, u_profile, goal_placements_list) = args
+
+    # Each worker creates its own env (gym envs are not picklable)
+    import minigrid  # noqa: F401
+    import gymnasium as gym
+    env = gym.make("MiniGrid-FourRooms-v0")
+    env.unwrapped.max_steps = max_steps + 100
+    env.reset(seed=seed)
+    state_mapper = StateMapper(env)
+    n_states = state_mapper.n_states
+
+    # Convert goal placements back to list of tuples
+    goal_placements = [[tuple(g) for g in goals] for goals in goal_placements_list]
+
+    cond_results = []
+    for run_idx in tqdm(range(n_runs), desc=f"{cond_name:20s}", leave=True):
+        env_seed = seed
+        agent_seed = seed + 10000 + run_idx * n_conditions + cond_index
+
+        agent = make_agent(
+            cond_name, n_states, state_mapper, M_star, agent_seed,
+            u_profile=u_profile,
+        )
+
+        metrics = run_single_episode(
+            env, agent, state_mapper,
+            goal_placements[run_idx], max_steps, env_seed,
+        )
+        metrics["condition"] = cond_name
+        metrics["run"] = run_idx
+        cond_results.append(metrics)
+
+    return (cond_name, cond_results)
+
+
 def run_exp_b(n_runs=100, max_steps=2000, seed=42,
-              output_dir="results/exp_b", conditions=None):
+              output_dir="results/exp_b", conditions=None, n_workers=None,
+              note=""):
     """Run Experiment B: exploration efficiency comparison.
 
     Args:
         n_runs: Number of runs per condition.
         max_steps: Max steps per episode.
         seed: Base random seed.
-        output_dir: Directory for results.
-        conditions: List of condition names (default: all 8).
+        output_dir: Root directory for this experiment's runs.
+        conditions: List of condition names (default: all 9).
+        n_workers: Number of parallel workers (default: min(cpu_count, conditions)).
+                   Use 1 for sequential execution.
+        note: Free-text annotation for this run.
 
     Returns:
         dict mapping condition -> list of metric dicts.
@@ -242,8 +305,15 @@ def run_exp_b(n_runs=100, max_steps=2000, seed=42,
     if conditions is None:
         conditions = CONDITIONS
 
-    output_dir = Path(output_dir)
+    if n_workers is None:
+        n_workers = min(os.cpu_count() or 1, len(conditions))
+
+    # Create timestamped run directory
+    run_timestamp = datetime.now()
+    run_name = f"run_{run_timestamp.strftime('%Y%m%d_%H%M%S')}"
+    output_dir = Path(output_dir) / run_name
     output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Run directory: {output_dir}")
 
     # --- Setup: create env, mapper, true SR ---
     print("Setting up environment...")
@@ -263,53 +333,62 @@ def run_exp_b(n_runs=100, max_steps=2000, seed=42,
     M_star = np.linalg.inv(np.eye(n_states) - gamma * T)
     print(f"  M* shape: {M_star.shape}, gamma={gamma}")
 
+    # --- Calibrate U profile for Count-Matched (if needed) ---
+    u_profile = None
+    if "SR-Count-Matched" in conditions:
+        print("Calibrating U(s) profile for SR-Count-Matched...")
+        u_profile = calibrate_u_profile(env, state_mapper, env_seed=seed)
+        print(f"  Profile length: {len(u_profile)}, "
+              f"range: [{u_profile.min():.4f}, {u_profile.max():.4f}]")
+        # Save profile
+        profile_path = output_dir / "u_profile.npy"
+        np.save(profile_path, u_profile)
+        print(f"  Saved to {profile_path}")
+
     # --- Pre-generate goal placements (same across conditions) ---
     print("Pre-generating goal placements...")
-    goal_placements = []
+    goal_placements_list = []
     for run_idx in range(n_runs):
         goal_rng = np.random.default_rng(seed + run_idx)
         goals = place_goals(state_mapper, n_goals=4, rng=goal_rng)
-        goal_placements.append(goals)
+        # Convert to plain lists for pickling
+        goal_placements_list.append([list(g) for g in goals])
 
     # --- Run all conditions ---
-    all_results = {}
     total_runs = len(conditions) * n_runs
     print(f"\nRunning {total_runs} episodes "
-          f"({len(conditions)} conditions x {n_runs} runs)...\n")
+          f"({len(conditions)} conditions x {n_runs} runs, "
+          f"{n_workers} workers)...\n")
 
     t_start = time.time()
 
+    # Build args for each condition
+    worker_args = []
     for cond_name in conditions:
-        cond_results = []
-        desc = f"{cond_name:20s}"
+        worker_args.append((
+            cond_name, n_runs, max_steps, seed,
+            len(conditions), conditions.index(cond_name),
+            M_star, u_profile, goal_placements_list,
+        ))
 
-        for run_idx in tqdm(range(n_runs), desc=desc, leave=True):
-            # Fixed env seed: grid structure must be constant across runs
-            # (FourRooms randomizes passage positions per seed).
-            # Variation comes from goal placement and agent seed.
-            env_seed = seed
-            agent_seed = seed + 10000 + run_idx * len(conditions) + \
-                conditions.index(cond_name)
-
-            agent = make_agent(
-                cond_name, n_states, state_mapper, M_star, agent_seed,
-            )
-
-            metrics = run_single_episode(
-                env, agent, state_mapper,
-                goal_placements[run_idx], max_steps, env_seed,
-            )
-            metrics["condition"] = cond_name
-            metrics["run"] = run_idx
-            cond_results.append(metrics)
-
-        all_results[cond_name] = cond_results
+    all_results = {}
+    if n_workers == 1:
+        # Sequential execution (debug mode)
+        for args in worker_args:
+            cond_name, cond_results = _run_condition(args)
+            all_results[cond_name] = cond_results
+    else:
+        # Parallel execution
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            for cond_name, cond_results in executor.map(_run_condition,
+                                                        worker_args):
+                all_results[cond_name] = cond_results
 
     elapsed = time.time() - t_start
     print(f"\nDone in {elapsed:.1f}s ({elapsed/total_runs:.3f}s per run)")
 
     # --- Save results ---
-    _save_results(all_results, output_dir, n_runs)
+    _save_results(all_results, output_dir, n_runs, max_steps)
 
     # --- Print summary ---
     _print_summary(all_results, max_steps)
@@ -317,19 +396,39 @@ def run_exp_b(n_runs=100, max_steps=2000, seed=42,
     # --- Statistical tests ---
     _run_statistics(all_results, output_dir)
 
+    # --- Save run metadata ---
+    run_info = {
+        "timestamp": run_timestamp.isoformat(timespec="seconds"),
+        "experiment": "exp_b",
+        "seed": seed,
+        "n_runs": n_runs,
+        "max_steps": max_steps,
+        "n_workers": n_workers,
+        "conditions": list(conditions),
+        "n_conditions": len(conditions),
+        "total_episodes": total_runs,
+        "elapsed_seconds": round(elapsed, 1),
+        "note": note,
+    }
+    run_info_path = output_dir / "run_info.json"
+    with open(run_info_path, "w") as f:
+        json.dump(run_info, f, indent=2)
+    print(f"\nRun info saved to {run_info_path}")
+
     return all_results
 
 
 # ---------------------------------------------------------------------------
 # Results I/O
 # ---------------------------------------------------------------------------
-def _save_results(all_results, output_dir, n_runs):
+def _save_results(all_results, output_dir, n_runs, max_steps=2000):
     """Save results as CSV."""
     csv_path = output_dir / "exploration_results.csv"
     fieldnames = [
         "condition", "run", "steps", "goals_found", "all_found",
         "coverage", "redundancy",
         "discovery_1", "discovery_2", "discovery_3", "discovery_4",
+        "auc_discovery",
     ]
 
     with open(csv_path, "w", newline="") as f:
@@ -337,6 +436,9 @@ def _save_results(all_results, output_dir, n_runs):
         writer.writeheader()
         for cond_name, runs in all_results.items():
             for m in runs:
+                auc = compute_discovery_auc(
+                    m["discovery_times"], n_goals=4, t_max=max_steps,
+                )
                 row = {
                     "condition": m["condition"],
                     "run": m["run"],
@@ -345,6 +447,7 @@ def _save_results(all_results, output_dir, n_runs):
                     "all_found": m["all_found"],
                     "coverage": f"{m['coverage']:.4f}",
                     "redundancy": f"{m['redundancy']:.4f}",
+                    "auc_discovery": f"{auc:.4f}",
                 }
                 for i, t in enumerate(m["discovery_times"]):
                     row[f"discovery_{i+1}"] = t
@@ -471,6 +574,10 @@ def main():
     parser.add_argument("--output_dir", type=str, default="results/exp_b")
     parser.add_argument("--conditions", nargs="+", default=None,
                         help="Subset of conditions to run")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Number of parallel workers (default: auto)")
+    parser.add_argument("--note", type=str, default="",
+                        help="Free-text note for this run")
     args = parser.parse_args()
 
     run_exp_b(
@@ -479,6 +586,8 @@ def main():
         seed=args.seed,
         output_dir=args.output_dir,
         conditions=args.conditions,
+        n_workers=args.workers,
+        note=args.note,
     )
 
 

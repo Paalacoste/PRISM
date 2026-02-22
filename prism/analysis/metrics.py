@@ -1,7 +1,9 @@
-"""Statistical analysis: bootstrap CI, Mann-Whitney U, Holm-Bonferroni.
+"""Statistical analysis: bootstrap CI, Mann-Whitney U, Holm-Bonferroni,
+discovery AUC, guidance index.
 
 References:
     master.md section 6 (statistical protocol)
+    exp_b_improvements.md — Améliorations 2+3
 """
 
 import numpy as np
@@ -116,6 +118,59 @@ def compare_conditions(results_dict, reference="PRISM", alternative="two-sided")
         r["p_corrected"] = p_corr
 
     return sorted(raw_results, key=lambda r: r["p_corrected"])
+
+
+# ---------------------------------------------------------------------------
+# Discovery AUC
+# ---------------------------------------------------------------------------
+def compute_discovery_auc(discovery_times, n_goals=4, t_max=2000):
+    """AUC of the discovery curve — captures speed AND regularity.
+
+    AUC = sum(max(0, t_max - d_i) for found goals) / (n_goals * t_max)
+
+    Args:
+        discovery_times: list/array of discovery timestamps per goal.
+            Unfound goals should have value > t_max (e.g. t_max + 1).
+        n_goals: Total number of goals.
+        t_max: Maximum steps per episode.
+
+    Returns:
+        float in [0, 1]. Higher = faster and more regular discovery.
+    """
+    total = 0.0
+    for d in discovery_times:
+        if d <= t_max:
+            total += t_max - d
+    return total / (n_goals * t_max)
+
+
+# ---------------------------------------------------------------------------
+# Guidance index
+# ---------------------------------------------------------------------------
+def compute_guidance_index(room_visit_order, room_mean_bonus):
+    """Spearman correlation between room visit order and exploration bonus.
+
+    Measures whether the agent visits high-bonus (high-uncertainty) rooms first.
+
+    Args:
+        room_visit_order: array-like of length n_rooms. Ordinal rank of first
+            visit (1 = first room visited, n = last).
+        room_mean_bonus: array-like of length n_rooms. Mean exploration bonus
+            of the room at the time of first visit.
+
+    Returns:
+        float in [-1, 1]. Positive = agent visits high-bonus rooms first.
+        Returns 0.0 if fewer than 3 rooms or constant values.
+    """
+    order = np.asarray(room_visit_order, dtype=float)
+    bonus = np.asarray(room_mean_bonus, dtype=float)
+
+    if len(order) < 3 or np.std(order) == 0 or np.std(bonus) == 0:
+        return 0.0
+
+    corr, _ = stats.spearmanr(order, bonus)
+    # Negate: low order (visited early) + high bonus = positive guidance
+    return float(-corr)
 
 
 def compare_all_pairs(results_dict):

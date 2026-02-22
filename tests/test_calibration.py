@@ -8,6 +8,7 @@ from prism.analysis.calibration import (
     sr_accuracies,
     expected_calibration_error,
     reliability_diagram_data,
+    hosmer_lemeshow_test,
     metacognitive_index,
 )
 
@@ -147,3 +148,43 @@ class TestMetacognitiveIndex:
         result = metacognitive_index(U, M, M_star)
         assert isinstance(result, tuple)
         assert len(result) == 2
+
+
+class TestHosmerLemeshow:
+
+    def test_returns_tuple(self):
+        confs = np.random.rand(100)
+        accs = np.random.randint(0, 2, 100).astype(float)
+        result = hosmer_lemeshow_test(confs, accs)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_perfect_calibration_high_p(self):
+        """Well-calibrated data should yield high p-value."""
+        np.random.seed(42)
+        confs = np.random.rand(500)
+        accs = (np.random.rand(500) < confs).astype(float)
+        stat, p = hosmer_lemeshow_test(confs, accs)
+        assert p > 0.05  # should not reject
+
+    def test_bad_calibration_low_p(self):
+        """Badly calibrated data: high confidence, all wrong."""
+        confs = np.linspace(0.8, 1.0, 200)
+        accs = np.zeros(200)
+        stat, p = hosmer_lemeshow_test(confs, accs)
+        assert stat > 0  # chi2 should be positive
+        assert p < 0.05  # should reject
+
+    def test_small_sample_returns_default(self):
+        """Fewer samples than bins → default (0, 1)."""
+        stat, p = hosmer_lemeshow_test(np.array([0.5]), np.array([1.0]))
+        assert stat == 0.0
+        assert p == 1.0
+
+    def test_chi2_non_negative(self):
+        np.random.seed(123)
+        confs = np.random.rand(100)
+        accs = np.random.randint(0, 2, 100).astype(float)
+        stat, p = hosmer_lemeshow_test(confs, accs)
+        assert stat >= 0
+        assert 0 <= p <= 1

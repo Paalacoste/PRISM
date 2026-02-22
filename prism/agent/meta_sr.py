@@ -55,6 +55,9 @@ class MetaSR:
         self._buffers = [deque(maxlen=buffer_size) for _ in range(n_states)]
         self.visit_counts = np.zeros(n_states, dtype=np.int64)
 
+        # Cached uncertainty map (updated incrementally in observe())
+        self._U_cache = np.full(n_states, U_prior, dtype=np.float64)
+
         # Running normalization for delta scalars
         self._all_deltas = deque(maxlen=5000)
         self._p99_cache = 0.0
@@ -98,9 +101,17 @@ class MetaSR:
         self.visit_counts[s] += 1
         self._recent_visits.append(s)
 
-    def uncertainty(self, s: int) -> float:
-        """Compute U(s) — uncertainty at state s.
+        # Update cached uncertainty for state s
+        visits = self.visit_counts[s]
+        if visits < self.buffer_size:
+            self._U_cache[s] = self.U_prior * (self.decay ** visits)
+        else:
+            self._U_cache[s] = float(np.mean(self._buffers[s]))
 
+    def uncertainty(self, s: int) -> float:
+        """Return U(s) — uncertainty at state s.
+
+        Cache is maintained incrementally in observe().
         Three regimes:
             visits == 0:       U = U_prior
             0 < visits < K:    U = U_prior * decay^visits
@@ -109,18 +120,11 @@ class MetaSR:
         Returns:
             Uncertainty value in [0, 1].
         """
-        visits = self.visit_counts[s]
-
-        if visits == 0:
-            return self.U_prior
-        elif visits < self.buffer_size:
-            return self.U_prior * (self.decay ** visits)
-        else:
-            return float(np.mean(self._buffers[s]))
+        return float(self._U_cache[s])
 
     def all_uncertainties(self) -> np.ndarray:
-        """Compute U for all states. Returns array of shape (n_states,)."""
-        return np.array([self.uncertainty(s) for s in range(self.n_states)])
+        """Return U for all states. Returns array of shape (n_states,)."""
+        return self._U_cache.copy()
 
     def confidence(self, s: int) -> float:
         """Confidence signal C(s) in [0, 1]. 1 = high confidence.

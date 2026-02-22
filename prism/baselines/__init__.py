@@ -5,6 +5,13 @@ from prism.baselines.sr_blind import SREpsilonGreedy, SREpsilonDecay
 from prism.baselines.sr_count import SRCountBonus, SRNormBonus
 from prism.baselines.sr_bayesian import SRPosterior
 from prism.baselines.sr_oracle import SROracle
+from prism.baselines.sr_count_matched import SRCountMatched
+from prism.baselines.calibration_baselines import (
+    SRGlobalConf,
+    SRCountConf,
+    SRBayesianConf,
+    RandomConfAgent,
+)
 
 __all__ = [
     "BaseSRAgent",
@@ -15,4 +22,9 @@ __all__ = [
     "SRNormBonus",
     "SRPosterior",
     "SROracle",
+    "SRCountMatched",
+    "SRGlobalConf",
+    "SRCountConf",
+    "SRBayesianConf",
+    "RandomConfAgent",
 ]

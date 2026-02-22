@@ -40,6 +40,8 @@ class SRLayer:
         self.M = np.eye(n_states, dtype=np.float64)
         # R initialized to zero: no prior reward knowledge
         self.R = np.zeros(n_states, dtype=np.float64)
+        # Pre-allocated work buffer for TD update (avoids per-step allocation)
+        self._e_next = np.zeros(n_states, dtype=np.float64)
 
     def update(self, s: int, s_next: int, reward: float) -> np.ndarray:
         """Perform one TD(0) update step.
@@ -56,12 +58,12 @@ class SRLayer:
             delta_M: TD error vector of shape (n_states,).
                      delta_M = e(s') + gamma * M(s', :) - M(s, :)
         """
-        # One-hot for next state
-        e_next = np.zeros(self.n_states, dtype=np.float64)
-        e_next[s_next] = 1.0
+        # One-hot for next state (reuse pre-allocated buffer)
+        self._e_next[:] = 0.0
+        self._e_next[s_next] = 1.0
 
         # TD error on M row
-        delta_M = e_next + self.gamma * self.M[s_next] - self.M[s]
+        delta_M = self._e_next + self.gamma * self.M[s_next] - self.M[s]
 
         # Update M
         self.M[s] += self.alpha_M * delta_M
